@@ -13,13 +13,16 @@ class RoPE(nn.Module):
         pos = torch.arange(start_pos, start_pos + T, device=q.device)
         freqs = torch.einsum("t,d->td", pos, self.inv_freq)
 
-        sin, cos = freqs.sin(), freqs.cos()
-        sin = sin[None, :, None, :]
-        cos = cos[None, :, None, :]
+        sin = freqs.sin()[None, :, None, :]
+        cos = freqs.cos()[None, :, None, :]
 
         def rotate(x):
-            x1, x2 = x[..., ::2], x[..., 1::2]
-            return torch.cat([x1 * cos - x2 * sin,
-                              x1 * sin + x2 * cos], dim=-1)
+            x1 = x[..., ::2]
+            x2 = x[..., 1::2]
+            return torch.cat(
+                [x1 * cos - x2 * sin,
+                 x1 * sin + x2 * cos],
+                dim=-1
+            )
 
         return rotate(q), rotate(k)
