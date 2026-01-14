@@ -54,16 +54,13 @@ optimizer.py # Optimizer wrapper
 scheduler.py # Learning rate scheduler
 train.py # Training loop
 
-yaml
-Copy code
-
 ---
 
 ## **Installation**
 
 ```bash
 # Create virtual environment
-python -m venv venv
+ -m venv venv
 source venv/bin/activate
 
 # Install dependencies
@@ -76,21 +73,17 @@ Configure model and training parameters in /config/model.yaml and /config/train.
 Prepare your dataset using /scripts/preprocess_data.py.
 
 Launch distributed training:
-
-bash
-Copy code
-bash scripts/lauch_deepspeed.sh
+ 
+scripts/lauch_deepspeed.sh
 # or
-python -m torch.distributed.run --nproc_per_node=8 scripts/train.py
+ -m torch.distributed.run --nproc_per_node=8 scripts/train.py
 Model checkpoints are saved in /training/checkpoints/.
 
 Inference
 This repository separates training and inference pipelines for efficiency.
 
 Initialize KV pools:
-
-python
-Copy code
+ 
 from inference.paged_kv import PageAllocator, KVState, PAGE_SIZE, MAX_PAGES
 import torch
 
@@ -101,19 +94,19 @@ allocator = PageAllocator(MAX_PAGES)
 state = KVState()
 Load the transformer model:
 
-python
-Copy code
+
+ 
 from inference.transformer import Transformer
 model = Transformer().to(device)
 Feed tokenized input through the model:
 
-python
-Copy code
+
+ 
 logits = model(input_ids, state, K_pool, V_pool, allocator)
 Optional: use speculative decoding for faster generation:
 
-python
-Copy code
+
+ 
 from inference.speculative import speculative_decode
 output_ids = speculative_decode(target_model, draft_model, input_ids, max_new_tokens=50)
 Features
