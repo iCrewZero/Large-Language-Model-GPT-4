@@ -1,4 +1,3 @@
-# Large-Language-Model-GPT-4
 # GPT-4 Style Large Language Model
 
 Welcome to my custom **GPT-4 inspired LLM** repository! This project includes everything from **training** to **efficient inference**, with advanced features like **paged KV caching**, **hybrid INT8-FP16 keys and values**, **YaRN RoPE embeddings**, and **speculative decoding** for faster generation.  
@@ -54,13 +53,16 @@ optimizer.py # Optimizer wrapper
 scheduler.py # Learning rate scheduler
 train.py # Training loop
 
+yaml
+Copy code
+
 ---
 
 ## **Installation**
 
 ```bash
 # Create virtual environment
- -m venv venv
+python -m venv venv
 source venv/bin/activate
 
 # Install dependencies
@@ -73,17 +75,21 @@ Configure model and training parameters in /config/model.yaml and /config/train.
 Prepare your dataset using /scripts/preprocess_data.py.
 
 Launch distributed training:
- 
-scripts/lauch_deepspeed.sh
+
+bash
+Copy code
+bash scripts/lauch_deepspeed.sh
 # or
- -m torch.distributed.run --nproc_per_node=8 scripts/train.py
+python -m torch.distributed.run --nproc_per_node=8 scripts/train.py
 Model checkpoints are saved in /training/checkpoints/.
 
 Inference
 This repository separates training and inference pipelines for efficiency.
 
 Initialize KV pools:
- 
+
+python
+Copy code
 from inference.paged_kv import PageAllocator, KVState, PAGE_SIZE, MAX_PAGES
 import torch
 
@@ -94,19 +100,19 @@ allocator = PageAllocator(MAX_PAGES)
 state = KVState()
 Load the transformer model:
 
-
- 
+python
+Copy code
 from inference.transformer import Transformer
 model = Transformer().to(device)
 Feed tokenized input through the model:
 
-
- 
+python
+Copy code
 logits = model(input_ids, state, K_pool, V_pool, allocator)
 Optional: use speculative decoding for faster generation:
 
-
- 
+python
+Copy code
 from inference.speculative import speculative_decode
 output_ids = speculative_decode(target_model, draft_model, input_ids, max_new_tokens=50)
 Features
