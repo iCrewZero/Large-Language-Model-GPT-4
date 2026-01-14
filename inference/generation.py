@@ -1,22 +1,14 @@
 import torch
-import torch.nn.functional as F
+from model.gpt import GPT
 
-@torch.no_grad()
-def generate(model, idx, max_new):
-    B = idx.size(0)
-    cfg = model.cfg
-    device = idx.device
+model = GPT(32000, 512, 6, 8).cuda()
+model.eval()
 
-    cache = []
-    for _ in model.blocks:
-        k = torch.zeros(B, cfg.n_kv_head, max_new + idx.size(1), cfg.n_embd // cfg.n_head, device=device)
-        v = torch.zeros_like(k)
-        cache.append([k, v, 0])
+idx = torch.tensor([[1]], device="cuda")
 
-    for _ in range(max_new):
-        logits, _ = model(idx[:, -1:], cache=cache)
-        probs = F.softmax(logits[:, -1], -1)
-        nxt = torch.multinomial(probs, 1)
-        idx = torch.cat([idx, nxt], 1)
+for _ in range(50):
+    logits = model(idx)
+    next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True)
+    idx = torch.cat([idx, next_token], dim=1)
 
-    return idx
+print(idx)
