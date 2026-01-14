@@ -10,7 +10,7 @@ class CausalSelfAttention(nn.Module):
         self.scale = self.head_dim ** -0.5
 
         self.qkv = nn.Linear(dim, dim * 3, bias=False)
-        self.proj = nn.Linear(dim, dim, bias=False)
+        self.out = nn.Linear(dim, dim, bias=False)
 
     def forward(self, x, rope, start_pos=0):
         B, T, C = x.shape
@@ -32,4 +32,4 @@ class CausalSelfAttention(nn.Module):
         out = att @ v
 
         out = out.transpose(1, 2).contiguous().view(B, T, C)
-        return self.proj(out)
+        return self.out(out)
