@@ -1,29 +1,36 @@
 import torch.nn as nn
 from .attention import CausalSelfAttention
 
-class RMSNorm(nn.Module):
-    def __init__(self, dim, eps=1e-6):
-        super().__init__()
-        self.w = nn.Parameter(torch.ones(dim))
-        self.eps = eps
 
-    def forward(self, x):
-        return x * (x.pow(2).mean(-1, keepdim=True) + self.eps).rsqrt() * self.w
-
-class Block(nn.Module):
-    def __init__(self, dim, n_head, n_kv_head, use_flash):
+class TransformerBlock(nn.Module):
+    def __init__(
+        self,
+        dim,
+        n_head,
+        n_kv_head,
+        rope,
+        mlp,
+        use_flash=False,
+    ):
         super().__init__()
-        self.n1 = RMSNorm(dim)
-        self.attn = CausalSelfAttention(dim, n_head, n_kv_head, use_flash)
-        self.n2 = RMSNorm(dim)
-        self.mlp = nn.Sequential(
-            nn.Linear(dim, dim * 4),
-            nn.GELU(),
-            nn.Linear(dim * 4, dim)
+
+        self.attn = CausalSelfAttention(
+            dim=dim,
+            n_head=n_head,
+            n_kv_head=n_kv_head,
+            rope=rope,
+            use_flash=use_flash,
         )
 
-    def forward(self, x, rope, start_pos=0, kv_cache=None):
-        a, kv = self.attn(self.n1(x), rope, start_pos, kv_cache)
-        x = x + a
-        x = x + self.mlp(self.n2(x))
-        return x, kv
+        self.mlp = mlp
+
+        self.attn_norm = nn.RMSNorm(dim)
+        self.mlp_norm = nn.RMSNorm(dim)
+
+    def forward(self, x, start_pos=0):
+        x = x + self.attn(
+            self.attn_norm(x),
+            start_pos=start_pos,
+        )
+        x = x + self.mlp(self.mlp_norm(x))
+        return x
