@@ -3,51 +3,44 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, dim, n_heads, use_flash=True):
+    def __init__(self, dim, n_head, n_kv_head, use_flash):
         super().__init__()
-        assert dim % n_heads == 0
-        self.n_heads = n_heads
-        self.head_dim = dim // n_heads
+        self.n_head = n_head
+        self.n_kv_head = n_kv_head
+        self.head_dim = dim // n_head
         self.use_flash = use_flash
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=False)
-        self.out = nn.Linear(dim, dim, bias=False)
+        self.q = nn.Linear(dim, dim, bias=False)
+        self.kv = nn.Linear(dim, dim * 2 // n_head * n_kv_head, bias=False)
+        self.o = nn.Linear(dim, dim, bias=False)
 
     def forward(self, x, rope, start_pos=0, kv_cache=None):
-        # x: [B, T, C]
         B, T, C = x.shape
 
-        qkv = self.qkv(x)
-        q, k, v = qkv.chunk(3, dim=-1)
+        q = self.q(x).view(B, T, self.n_head, self.head_dim)
+        kv = self.kv(x).view(B, T, 2, self.n_kv_head, self.head_dim)
+        k, v = kv[:, :, 0], kv[:, :, 1]
 
-        q = q.view(B, T, self.n_heads, self.head_dim)
-        k = k.view(B, T, self.n_heads, self.head_dim)
-        v = v.view(B, T, self.n_heads, self.head_dim)
-
-        # APPLY RoPE WITH OFFSET
         q, k = rope(q, k, start_pos)
 
-        # transpose for SDPA
-        q = q.transpose(1, 2)  # [B, H, T, D]
+        q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
         if kv_cache is not None:
-            past_k, past_v = kv_cache
-            k = torch.cat([past_k, k], dim=2)
-            v = torch.cat([past_v, v], dim=2)
+            pk, pv = kv_cache
+            k = torch.cat([pk, k], dim=2)
+            v = torch.cat([pv, v], dim=2)
+
+        k = k.repeat_interleave(self.n_head // self.n_kv_head, dim=1)
+        v = v.repeat_interleave(self.n_head // self.n_kv_head, dim=1)
 
         if self.use_flash and torch.cuda.is_available():
-            out = F.scaled_dot_product_attention(
-                q, k, v,
-                is_causal=True
-            )
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         else:
             att = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5)
-            mask = torch.tril(torch.ones(att.size(-1), att.size(-1), device=x.device))
-            att = att.masked_fill(mask == 0, float("-inf"))
             att = att.softmax(dim=-1)
             out = att @ v
 
-        out = out.transpose(1, 2).contiguous().view(B, T, C)
-        return self.out(out), (k, v)
+        out = out.transpose(1, 2).reshape(B, T, C)
+        return self.o(out), (k, v)
