@@ -1,6 +1,5 @@
-import torch
 import torch.nn as nn
-from .block import Block
+from .blocks import Block
 from .rmsnorm import RMSNorm
 from .rope import RoPE
 
@@ -10,9 +9,9 @@ class GPT(nn.Module):
         self.embed = nn.Embedding(vocab_size, dim)
         self.rope = RoPE(dim // heads)
 
-        self.blocks = nn.ModuleList([
-            Block(dim, heads) for _ in range(layers)
-        ])
+        self.blocks = nn.ModuleList(
+            [Block(dim, heads) for _ in range(layers)]
+        )
 
         self.norm = RMSNorm(dim)
         self.lm_head = nn.Linear(dim, vocab_size, bias=False)
