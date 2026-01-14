@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .kv_quant import quantize_kv, dequantize_kv
+from .kv_quant import quantize_k, dequantize_k
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, dim, n_head, n_kv_head, use_flash):
@@ -24,11 +24,9 @@ class CausalSelfAttention(nn.Module):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-
         if kv_cache is not None:
-            pk_i8, pk_s, pv_i8, pv_s = kv_cache
-            pk = dequantize_kv(pk_i8, pk_s)
-            pv = dequantize_kv(pv_i8, pv_s)
+            pk_i8, pk_s, pv = kv_cache
+            pk = dequantize_k(pk_i8, pk_s)
             k = torch.cat([pk, k], dim=2)
             v = torch.cat([pv, v], dim=2)
 
@@ -46,7 +44,7 @@ class CausalSelfAttention(nn.Module):
 
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         out = self.o(out)
-        k_i8, k_s = quantize_kv(k)
-        v_i8, v_s = quantize_kv(v)
+        k_i8, k_s = quantize_k(k)
+        kv_cache = (k_i8, k_s, v)
 
-        return out, (k_i8, k_s, v_i8, v_s)
+        return out, kv_cache
