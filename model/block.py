@@ -1,26 +1,29 @@
 import torch.nn as nn
 from .attention import CausalSelfAttention
-from .rmsnorm import RMSNorm
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.w = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+
+    def forward(self, x):
+        return x * (x.pow(2).mean(-1, keepdim=True) + self.eps).rsqrt() * self.w
 
 class Block(nn.Module):
-    def __init__(self, dim, heads, mlp_ratio=4, use_flash=True):
+    def __init__(self, dim, n_head, n_kv_head, use_flash):
         super().__init__()
-        self.norm1 = RMSNorm(dim)
-        self.attn = CausalSelfAttention(dim, heads, use_flash)
-
-        self.norm2 = RMSNorm(dim)
+        self.n1 = RMSNorm(dim)
+        self.attn = CausalSelfAttention(dim, n_head, n_kv_head, use_flash)
+        self.n2 = RMSNorm(dim)
         self.mlp = nn.Sequential(
-            nn.Linear(dim, dim * mlp_ratio),
+            nn.Linear(dim, dim * 4),
             nn.GELU(),
-            nn.Linear(dim * mlp_ratio, dim)
+            nn.Linear(dim * 4, dim)
         )
 
-    def forward(self, x, rope, start_pos=0):
-        x = x + self.attn(self.norm1(x), rope, start_pos)
-        x = x + self.mlp(self.norm2(x))
-        return x
-
-    def forward(self, x, rope, start_pos=0):
-        x = x + self.attn(self.norm1(x), rope, start_pos)
-        x = x + self.mlp(self.norm2(x))
-        return x
+    def forward(self, x, rope, start_pos=0, kv_cache=None):
+        a, kv = self.attn(self.n1(x), rope, start_pos, kv_cache)
+        x = x + a
+        x = x + self.mlp(self.n2(x))
+        return x, kv
