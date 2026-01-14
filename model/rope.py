@@ -1,23 +1,25 @@
 import torch
 import torch.nn as nn
 
-class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, base=10000, factor=1.0):
+class RoPE(nn.Module):
+    def __init__(self, head_dim):
         super().__init__()
-        inv = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer("inv_freq", inv / factor, persistent=False)
-        self.cache = {}
+        assert head_dim % 2 == 0
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, head_dim, 2) / head_dim))
+        self.register_buffer("inv_freq", inv_freq)
 
-    def get(self, seq_len, device, dtype):
-        if seq_len not in self.cache:
-            t = torch.arange(seq_len, device=device)
-            freqs = torch.outer(t, self.inv_freq)
-            emb = torch.cat([freqs, freqs], dim=-1)
-            self.cache[seq_len] = (emb.cos().to(dtype), emb.sin().to(dtype))
-        return self.cache[seq_len]
+    def forward(self, q, k, start_pos=0):
+        B, T, H, D = q.shape
+        pos = torch.arange(start_pos, start_pos + T, device=q.device)
+        freqs = torch.einsum("t,d->td", pos, self.inv_freq)
 
-def apply_rope(q, k, cos, sin):
-    def rot(x):
-        x1, x2 = x.chunk(2, dim=-1)
-        return torch.cat([-x2, x1], dim=-1)
-    return (q * cos) + (rot(q) * sin), (k * cos) + (rot(k) * sin)
+        sin, cos = freqs.sin(), freqs.cos()
+        sin = sin[None, :, None, :]
+        cos = cos[None, :, None, :]
+
+        def rotate(x):
+            x1, x2 = x[..., ::2], x[..., 1::2]
+            return torch.cat([x1 * cos - x2 * sin,
+                              x1 * sin + x2 * cos], dim=-1)
+
+        return rotate(q), rotate(k)
