@@ -1,84 +1,60 @@
 import torch
+from dataclasses import dataclass
+from typing import List
 
-
-class PageAllocator:
-    def __init__(self, num_pages: int, page_size: int):
-        self.num_pages = num_pages
-        self.page_size = page_size
-        self.free_pages = list(range(num_pages))
-
-    def alloc(self) -> int:
-        if not self.free_pages:
-            raise RuntimeError("Out of KV pages")
-        return self.free_pages.pop()
-
-    def free(self, pid: int):
-        self.free_pages.append(pid)
-
-
+@dataclass
 class KVState:
-    def __init__(self):
-        self.pages = []
-        self.seq_len = 0
+    pages: List[int]
+    seqlen: int
 
-    def reset(self, allocator: PageAllocator):
-        for pid in self.pages:
+    def rollback(self, new_len, allocator):
+        keep_pages = (new_len + allocator.page_size - 1) // allocator.page_size
+        for pid in self.pages[keep_pages:]:
             allocator.free(pid)
-        self.pages.clear()
-        self.seq_len = 0
+        self.pages = self.pages[:keep_pages]
+        self.seqlen = new_len
 
+class KVAllocator:
+    def __init__(self, num_pages, n_heads, head_dim, page_size):
+        self.page_size = page_size
+        self.free = list(range(num_pages))
+        self.n_heads = n_heads
+        self.head_dim = head_dim
+        self.K = torch.empty(num_pages, page_size, n_heads, head_dim, dtype=torch.int8, device="cuda")
+        self.V = torch.empty_like(self.K)
+        self.K_scale = torch.empty(num_pages, 1, n_heads, 1, dtype=torch.float16, device="cuda")
+        self.V_scale = torch.empty_like(self.K_scale)
 
-def append_tokens(
-    state: KVState,
-    allocator: PageAllocator,
-    num_tokens: int
-):
-    start = state.seq_len
-    end = start + num_tokens
+    def alloc(self):
+        assert self.free, "OOM: KV pages exhausted"
+        return self.free.pop()
 
-    first_page = start // allocator.page_size
-    last_page = (end - 1) // allocator.page_size
+    def free(self, pid):
+        self.free.append(pid)
 
-    while len(state.pages) <= last_page:
-        state.pages.append(allocator.alloc())
+def append_token_state(state: KVState, allocator: KVAllocator, page_size):
+    if state.seqlen % page_size == 0:
+        pid = allocator.alloc()
+        state.pages.append(pid)
+    state.seqlen += 1
 
-    state.seq_len = end
+def write_kv_token(K_pool, V_pool, state: KVState, k_tensor, v_tensor, page_size):
+    token_idx = state.seqlen - 1
+    page_idx = token_idx // page_size
+    offset = token_idx % page_size
+    pid = state.pages[page_idx]
+    K_pool[pid, offset] = k_tensor
+    V_pool[pid, offset] = v_tensor
 
-
-def write_kv_block(
-    K_pool: torch.Tensor,
-    V_pool: torch.Tensor,
-    state: KVState,
-    k_block: torch.Tensor,
-    v_block: torch.Tensor,
-    allocator: PageAllocator
-):
-    B, T, H, D = k_block.shape
-    base = state.seq_len - T
-
-    for t in range(T):
-        token_idx = base + t
-        page_idx = token_idx // allocator.page_size
-        offset = token_idx % allocator.page_size
-        pid = state.pages[page_idx]
-
-        K_pool[pid, offset].copy_(k_block[:, t])
-        V_pool[pid, offset].copy_(v_block[:, t])
-
-
-def iter_kv_pages(
-    K_pool: torch.Tensor,
-    V_pool: torch.Tensor,
-    state: KVState,
-    upto_len: int,
-    allocator: PageAllocator
-):
-    max_pages = (upto_len + allocator.page_size - 1) // allocator.page_size
-    for i in range(max_pages):
-        pid = state.pages[i]
-        start = i * allocator.page_size
-        end = min(start + allocator.page_size, upto_len)
-        yield (
-            K_pool[pid, : end - start],
-            V_pool[pid, : end - start]
-        )
+def gather_kv(K_pool, V_pool, state: KVState, upto_len, page_size):
+    needed_pages = (upto_len + page_size - 1) // page_size
+    ks, vs = [], []
+    for pid in state.pages[:needed_pages]:
+        ks.append(K_pool[pid].float())
+        vs.append(V_pool[pid])
+    K = torch.cat(ks, dim=1)
+    V = torch.cat(vs, dim=1)
+    if K.size(1) > upto_len:
+        K = K[:, :upto_len, :]
+        V = V[:, :upto_len, :]
+    return K, V
