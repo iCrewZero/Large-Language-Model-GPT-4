@@ -1,28 +1,16 @@
+import torch
 import torch.nn as nn
-from .block import Block, RMSNorm
-from .rope import RoPE
+from model.blocks import Block
 
 class GPT(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, vocab_size, d_model, n_layers, n_heads):
         super().__init__()
-        self.embed = nn.Embedding(cfg.vocab_size, cfg.n_embd)
-        self.rope = RoPE(cfg.n_embd // cfg.n_head)
+        self.embed = nn.Embedding(vocab_size, d_model)
+        self.blocks = nn.ModuleList([Block(d_model, n_heads) for _ in range(n_layers)])
+        self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
 
-        self.blocks = nn.ModuleList([
-            Block(cfg.n_embd, cfg.n_head, cfg.n_kv_head, cfg.use_flash)
-            for _ in range(cfg.n_layer)
-        ])
-
-        self.norm = RMSNorm(cfg.n_embd)
-        self.head = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
-
-    def forward(self, idx, start_pos=0, kv_cache=None):
-        x = self.embed(idx)
-        new_cache = []
-
-        for i, blk in enumerate(self.blocks):
-            past = None if kv_cache is None else kv_cache[i]
-            x, kv = blk(x, self.rope, start_pos, past)
-            new_cache.append(kv)
-
-        return self.head(self.norm(x)), new_cache
+    def forward(self, token_ids, state, allocator):
+        x = self.embed(token_ids)
+        for block in self.blocks:
+            x = block(x, state, allocator)
+        return self.lm_head(x)
