@@ -1,53 +1,83 @@
 import torch
 
 class PageAllocator:
-    def __init__(self, num_pages:int):
-        self.free = list(range(num_pages))
-    def alloc(self)->int:
-        if not self.free: raise MemoryError("out of free pages")
-        return self.free.pop()
-    def free_page(self,p:int):
-        self.free.append(p)
+    def __init__(self, num_pages: int, page_size: int):
+        self.num_pages = num_pages
+        self.page_size = page_size
+        self.free_pages = list(range(num_pages))
+
+    def alloc(self) -> int:
+        if not self.free_pages:
+            raise RuntimeError("Out of KV pages")
+        return self.free_pages.pop()
+
+    def free(self, pid: int):
+        self.free_pages.append(pid)
+
 
 class KVState:
-    __slots__=("pages","seq_len")
     def __init__(self):
-        self.pages=[]
-        self.seq_len=0
-    def reset(self):
+        self.pages = []
+        self.seq_len = 0
+
+    def reset(self, allocator: PageAllocator):
+        for pid in self.pages:
+            allocator.free(pid)
         self.pages.clear()
-        self.seq_len=0
+        self.seq_len = 0
 
-def append_token_state(state:KVState, allocator:PageAllocator, page_size:int):
-    if state.seq_len % page_size==0:
-        pid=allocator.alloc()
-        state.pages.append(pid)
-    state.seq_len+=1
 
-def truncate_state(state:KVState, allocator:PageAllocator, new_len:int, page_size:int):
-    old_pages=len(state.pages)
-    new_pages=(new_len+page_size-1)//page_size
-    for pid in state.pages[new_pages:]:
-        allocator.free_page(pid)
-    state.pages[:]=state.pages[:new_pages]
-    state.seq_len=new_len
+def append_tokens(
+    state: KVState,
+    allocator: PageAllocator,
+    num_tokens: int
+):
+    start = state.seq_len
+    end = start + num_tokens
 
-def gather_kv(K_pool:torch.Tensor,V_pool:torch.Tensor,state:KVState,upto_len:int,page_size:int):
-    needed_pages=(upto_len+page_size-1)//page_size
-    ks,vs=[],[]
-    for pid in state.pages[:needed_pages]:
-        ks.append(K_pool[pid].float())
-        vs.append(V_pool[pid])
-    K=torch.cat(ks,dim=2)
-    V=torch.cat(vs,dim=2)
-    if K.size(1)>upto_len:
-        K=K[:,:upto_len,:];V=V[:,:upto_len,:]
-    return K,V
+    first_page = start // allocator.page_size
+    last_page = (end - 1) // allocator.page_size
 
-def write_kv_token(K_pool:torch.Tensor,V_pool:torch.Tensor,state:KVState,k_tensor:torch.Tensor,v_tensor:torch.Tensor,page_size:int):
-    token_idx=state.seq_len-1
-    page_idx=token_idx//page_size
-    offset=token_idx%page_size
-    pid=state.pages[page_idx]
-    K_pool[pid,offset]=k_tensor
-    V_pool[pid,offset]=v_tensor
+    while len(state.pages) <= last_page:
+        state.pages.append(allocator.alloc())
+
+    state.seq_len = end
+
+
+def write_kv_block(
+    K_pool: torch.Tensor,
+    V_pool: torch.Tensor,
+    state: KVState,
+    k_block: torch.Tensor,
+    v_block: torch.Tensor,
+    allocator: PageAllocator
+):
+    B, T, H, D = k_block.shape
+    base = state.seq_len - T
+
+    for t in range(T):
+        token_idx = base + t
+        page_idx = token_idx // allocator.page_size
+        offset = token_idx % allocator.page_size
+        pid = state.pages[page_idx]
+
+        K_pool[pid, offset].copy_(k_block[:, t])
+        V_pool[pid, offset].copy_(v_block[:, t])
+
+
+def iter_kv_pages(
+    K_pool: torch.Tensor,
+    V_pool: torch.Tensor,
+    state: KVState,
+    upto_len: int,
+    allocator: PageAllocator
+):
+    max_pages = (upto_len + allocator.page_size - 1) // allocator.page_size
+    for i in range(max_pages):
+        pid = state.pages[i]
+        start = i * allocator.page_size
+        end = min(start + allocator.page_size, upto_len)
+        yield (
+            K_pool[pid, : end - start],
+            V_pool[pid, : end - start]
+        )
