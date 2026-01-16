@@ -1,36 +1,29 @@
 import torch
-from model.gpt import GPT
-from inference.paged_kv import KVState, KVAllocator
 
-@torch.no_grad()
-def speculative_decode(target: GPT, draft: GPT, start_token, allocator: KVAllocator, steps=32, speculate_k=4):
-    t_state = KVState([], 0)
-    d_state = KVState([], 0)
-    token = start_token
-    out = [token.item()]
+class SpeculativeDecoder:
+def init(self, draft_model, main_model, verifier):
+self.draft = draft_model
+self.main = main_model
+self.verifier = verifier
 
-    for _ in range(steps):
-        base_len = t_state.seqlen
-        draft_tokens = []
+def generate(self, input_ids, max_new_tokens=32):
+    for _ in range(max_new_tokens):
+        draft_logits = self.draft(input_ids)
+        draft_token = torch.argmax(draft_logits[:, -1], dim=-1)
 
-        for _ in range(speculate_k):
-            logits = draft(token.unsqueeze(0), d_state, allocator)
-            token = logits.argmax(-1)
-            draft_tokens.append(token)
+        candidate = torch.cat(
+            [input_ids, draft_token.unsqueeze(1)], dim=1
+        )
 
-        accepted = True
-        for t in draft_tokens:
-            logits = target(t.unsqueeze(0), t_state, allocator)
-            pred = logits.argmax(-1)
-            if pred.item() != t.item():
-                t_state.rollback(base_len, allocator)
-                out.append(pred.item())
-                token = pred
-                accepted = False
-                break
-            out.append(t.item())
+        main_logits = self.main(candidate)
+        verify_score = self.verifier(main_logits[:, -1])
 
-        if accepted:
-            token = draft_tokens[-1]
+        if verify_score.mean() > 0.5:
+            input_ids = candidate
+        else:
+            true_token = torch.argmax(main_logits[:, -1], dim=-1)
+            input_ids = torch.cat(
+                [input_ids, true_token.unsqueeze(1)], dim=1
+            )
 
-    return out
+    return input_ids
