@@ -1,19 +1,55 @@
-import torch, torch.nn as nn
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-class MoE(nn.Module):
-    def __init__(self, dim, experts, top_k):
-        super().__init__()
-        self.router = nn.Linear(dim, experts, False)
-        self.experts = nn.ModuleList(
-            [nn.Sequential(nn.Linear(dim,4*dim), nn.GELU(), nn.Linear(4*dim,dim))
-             for _ in range(experts)]
-        )
-        self.top_k = top_k
+class TokenRouter(nn.Module):
+def init(self, dim, num_experts, k=2):
+super().init()
+self.num_experts = num_experts
+self.k = k
+self.router = nn.Linear(dim, num_experts, bias=False)
 
-    def forward(self, x):
-        scores = self.router(x)
-        top = scores.topk(self.top_k, dim=-1).indices
-        out = 0
-        for i in range(self.top_k):
-            out += self.experts[top[...,i]](x)
-        return out / self.top_k
+def forward(self, x):
+    logits = self.router(x)
+    scores = F.softmax(logits, dim=-1)
+    topk_scores, topk_idx = torch.topk(scores, self.k, dim=-1)
+    return topk_scores, topk_idx
+
+
+class Expert(nn.Module):
+def init(self, dim, hidden_dim):
+super().init()
+self.net = nn.Sequential(
+nn.Linear(dim, hidden_dim),
+nn.GELU(),
+nn.Linear(hidden_dim, dim)
+)
+
+def forward(self, x):
+    return self.net(x)
+
+
+class SparseMoE(nn.Module):
+def init(self, dim, hidden_dim, num_experts=8, k=2):
+super().init()
+self.router = TokenRouter(dim, num_experts, k)
+self.experts = nn.ModuleList(
+[Expert(dim, hidden_dim) for _ in range(num_experts)]
+)
+
+def forward(self, x):
+    B, T, D = x.shape
+    scores, idx = self.router(x)
+
+    output = torch.zeros_like(x)
+
+    for b in range(B):
+        for t in range(T):
+            token_out = 0
+            for i in range(idx.size(-1)):
+                expert_id = idx[b, t, i].item()
+                weight = scores[b, t, i]
+                token_out += weight * self.experts[expert_id](x[b, t])
+            output[b, t] = token_out
+
+    return output
