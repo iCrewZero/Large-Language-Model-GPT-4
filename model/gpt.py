@@ -1,27 +1,24 @@
-import torch, torch.nn as nn
-from model.block import Block
-from model.verifier import Verifier
-from kv.paged_kv import KVState, PageAllocator
+import torch
+import torch.nn as nn
+from .block import Block
+from .rope import YaRNRoPE
 
 class GPT(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.emb = nn.Embedding(cfg.vocab_size, cfg.dim)
-        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layers)])
-        self.ln = nn.LayerNorm(cfg.dim)
-        self.head = nn.Linear(cfg.dim, cfg.vocab_size, False)
-        self.verifier = Verifier(cfg.dim)
+        self.embed = nn.Embedding(cfg.vocab_size, cfg.dim)
+        self.rope = YaRNRoPE(cfg.dim//cfg.n_head, cfg.rope_base, cfg.rope_factor)
 
-    def forward(self, ids):
-        x = self.emb(ids)
-        state = KVState()
-        alloc = PageAllocator(4096)
+        self.blocks = nn.ModuleList([
+            Block(cfg, self.rope) for _ in range(cfg.n_layer)
+        ])
 
-        for b in self.blocks:
-            x = b(x, state, alloc, 16)
+        self.norm = nn.LayerNorm(cfg.dim)
+        self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
 
-        h = self.ln(x)
-        return {
-            "logits": self.head(h),
-            "verifier": self.verifier(h)
-        }
+    def forward(self, idx):
+        x = self.embed(idx)
+        for i,blk in enumerate(self.blocks):
+            x = blk(x, pos=0)
+        x = self.norm(x)
+        return self.lm_head(x)
