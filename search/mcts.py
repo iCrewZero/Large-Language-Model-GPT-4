@@ -29,11 +29,11 @@ def search(self, input_ids):
 
     for _ in range(64):
         node = self.select(root)
+        self.expand(node)
         score = self.evaluate(node)
         self.backprop(node, score)
 
-    best = max(root.children, key=lambda n: n.visits)
-    return best.tokens
+    return max(root.children, key=lambda n: n.visits).tokens
 
 def select(self, node):
     while node.children:
