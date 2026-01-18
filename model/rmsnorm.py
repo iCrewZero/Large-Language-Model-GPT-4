@@ -8,5 +8,5 @@ class RMSNorm(nn.Module):
         self.eps = eps
 
     def forward(self, x):
-        norm = x.pow(2).mean(-1, keepdim=True)
-        return x * torch.rsqrt(norm + self.eps) * self.weight
+        norm = x.pow(2).mean(-1, keepdim=True).add(self.eps).rsqrt()
+        return x * norm * self.weight
