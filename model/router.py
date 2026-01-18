@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 
-class Router(nn.Module):
-    def __init__(self, dim, n_experts, topk):
+class TopKRouter(nn.Module):
+    def __init__(self, dim, n_experts, k):
         super().__init__()
-        self.linear = nn.Linear(dim, n_experts, bias=False)
-        self.topk = topk
+        self.k = k
+        self.gate = nn.Linear(dim, n_experts, bias=False)
 
     def forward(self, x):
-        scores = self.linear(x)
-        probs = torch.softmax(scores, dim=-1)
-        topv, topi = torch.topk(probs, self.topk, dim=-1)
-        return topi, topv
+        logits = self.gate(x)
+        scores, idx = torch.topk(logits, self.k, dim=-1)
+        probs = scores.softmax(dim=-1)
+        return probs, idx
