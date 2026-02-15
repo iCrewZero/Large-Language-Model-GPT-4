@@ -1,9 +1,106 @@
+import math
 import torch
 
-def reasoning_chain(model, input_ids, steps=5):
-    chain = input_ids
-    for _ in range(steps):
-        logits = model(chain)
-        token = torch.argmax(logits[:, -1], dim=-1)
-        chain = torch.cat([chain, token.unsqueeze(1)], dim=1)
-    return chain
+
+class MCTSNode:
+    def __init__(self, tokens, prior=1.0, parent=None):
+        self.tokens = tokens
+        self.prior = prior
+        self.parent = parent
+        self.children = {}
+        self.visits = 0
+        self.value_sum = 0.0
+
+    @property
+    def value(self):
+        return self.value_sum / max(1, self.visits)
+
+
+class MCTSReasoner:
+    """Token-level MCTS over chain-of-thought expansions scored by PRM/value head."""
+
+    def __init__(self, model, prm=None, simulations: int = 32, depth: int = 8, topk_expand: int = 4):
+        self.model = model
+        self.prm = prm
+        self.simulations = simulations
+        self.depth = depth
+        self.topk_expand = topk_expand
+
+    def _ucb(self, parent, child):
+        explore = math.sqrt(math.log(parent.visits + 1) / (child.visits + 1e-6))
+        return child.value + 1.4 * child.prior * explore
+
+    @torch.no_grad()
+    def _score(self, tokens):
+        out = self.model(tokens, return_hidden=True)
+        if self.prm is not None:
+            return float(self.prm.sequence_reward(out["hidden"]).item())
+        return float(out["value"][:, -1].mean().item())
+
+    @torch.no_grad()
+    def search(self, input_ids):
+        root = MCTSNode(input_ids)
+
+        for _ in range(self.simulations):
+            node = root
+            path = [node]
+
+            while node.children and len(path) < self.depth:
+                node = max(node.children.values(), key=lambda c: self._ucb(path[-1], c))
+                path.append(node)
+
+            if len(path) < self.depth:
+                out = self.model(node.tokens)
+                probs = torch.softmax(out["logits"][:, -1, :], dim=-1)
+                topk_prob, topk_idx = torch.topk(probs, self.topk_expand, dim=-1)
+                for i in range(self.topk_expand):
+                    tok = topk_idx[0, i].view(1, 1)
+                    child_tokens = torch.cat([node.tokens, tok], dim=1)
+                    node.children[int(tok.item())] = MCTSNode(
+                        child_tokens,
+                        prior=float(topk_prob[0, i].item()),
+                        parent=node,
+                    )
+                node = max(node.children.values(), key=lambda c: c.prior)
+                path.append(node)
+
+            reward = self._score(node.tokens)
+            for p in path:
+                p.visits += 1
+                p.value_sum += reward
+
+        if not root.children:
+            return input_ids
+        best = max(root.children.values(), key=lambda c: c.visits)
+        return best.tokens
+
+
+@torch.no_grad()
+def self_refine_chain(model, input_ids, refine_steps: int = 3, memory_bank=None):
+    tokens = input_ids
+    for _ in range(refine_steps):
+        out = model(tokens, memory_bank=memory_bank)
+        nxt = torch.argmax(out["logits"][:, -1, :], dim=-1, keepdim=True)
+        tokens = torch.cat([tokens, nxt], dim=1)
+        # verifier-guided rollback
+        score = out["value"][:, -1].sigmoid()
+        if score.item() < 0.4 and tokens.size(1) > 2:
+            tokens = tokens[:, :-1]
+    return tokens
+
+
+@torch.no_grad()
+def tree_of_thought_beam(model, input_ids, beam_width: int = 4, depth: int = 4):
+    beams = [(input_ids, 0.0)]
+    for _ in range(depth):
+        next_beams = []
+        for tokens, score in beams:
+            out = model(tokens)
+            logp = torch.log_softmax(out["logits"][:, -1, :], dim=-1)
+            vals, idx = torch.topk(logp, beam_width, dim=-1)
+            for i in range(beam_width):
+                tok = idx[:, i : i + 1]
+                next_beams.append((torch.cat([tokens, tok], dim=1), score + float(vals[0, i].item())))
+        next_beams.sort(key=lambda x: x[1], reverse=True)
+        beams = next_beams[:beam_width]
+    return beams[0][0]
