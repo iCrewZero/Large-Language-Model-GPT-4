@@ -1,8 +1,24 @@
-vocab_size = 50280
-n_layer = 24
-n_embd = 2048
-n_head = 16
-n_kv_head = 8
-block_size = 32768
-rope_factor = 8.0
-use_flash = True
+vocab_size: 50280
+dim: 2048
+n_layer: 24
+n_head: 16
+n_kv_head: 8
+block_size: 4096
+rope_base: 10000
+rope_factor: 8.0
+dropout: 0.0
+local_window: 256
+global_stride: 64
+enable_mla: true
+mla_latent_dim: 512
+enable_moe: true
+moe_experts: 8
+moe_topk: 2
+moe_capacity_factor: 1.25
+moe_balance_momentum: 0.95
+enable_mtp: true
+mtp_steps: 3
+token_skip_threshold: 0.15
+enable_fp8_hooks: false
+enable_nvfp4_hooks: false
+enable_shape_checks: true

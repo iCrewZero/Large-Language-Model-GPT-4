@@ -1,26 +1,40 @@
+import torch
+
+
 class SequenceKVCache:
-    def __init__(self, allocator):
-        self.allocator = allocator
-        self.pages = []
-        self.cur_slot = 0
+    """Per-layer KV cache with token budget eviction and feedback trimming."""
 
-    def append(self, k_i8, v_fp16, scale):
-        if self.cur_slot == 0:
-            page = self.allocator.alloc_page()
-            self.pages.append(page)
+    def __init__(self, n_layers: int, max_tokens: int = 8192, keep_tokens_on_evict: int = 2048):
+        self.layers = [{"k": None, "v": None} for _ in range(n_layers)]
+        self.max_tokens = max_tokens
+        self.keep_tokens_on_evict = keep_tokens_on_evict
 
-        page_id = self.pages[-1]
-        self.allocator.write_kv(
-            page_id,
-            self.cur_slot,
-            k_i8,
-            v_fp16,
-            scale
-        )
+    def as_model_cache(self):
+        return self.layers
 
-        self.cur_slot += 1
-        if self.cur_slot == self.allocator.page_size:
-            self.cur_slot = 0
+    def append_feedback(self, layer_idx: int, keep_last_tokens: int):
+        layer = self.layers[layer_idx]
+        if layer["k"] is None:
+            return
+        layer["k"] = layer["k"][:, -keep_last_tokens:, :, :].contiguous()
+        layer["v"] = layer["v"][:, -keep_last_tokens:, :, :].contiguous()
 
-    def get_kv(self):
-        return self.allocator.read_kv(self.pages)
+    def evict_if_needed(self):
+        for layer in self.layers:
+            if layer["k"] is None:
+                continue
+            if layer["k"].size(1) > self.max_tokens:
+                layer["k"] = layer["k"][:, -self.keep_tokens_on_evict :, :, :].contiguous()
+                layer["v"] = layer["v"][:, -self.keep_tokens_on_evict :, :, :].contiguous()
+
+    def clear(self):
+        for layer in self.layers:
+            layer["k"] = None
+            layer["v"] = None
+
+    def to(self, device):
+        for layer in self.layers:
+            if layer["k"] is not None:
+                layer["k"] = layer["k"].to(device)
+                layer["v"] = layer["v"].to(device)
+        return self
