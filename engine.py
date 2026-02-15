@@ -1,20 +1,14 @@
+from inference.engine import Engine
+
+
 class LLMEngine:
-    def __init__(self, model, draft, verifier, tokenizer):
-        self.model = model
-        self.draft = draft
-        self.verifier = verifier
-        self.tokenizer = tokenizer
+    """High-level facade over inference.Engine."""
 
-    def generate(self, input_ids, mode="speculative"):
-        if mode == "speculative":
-            return SpeculativeDecoder(
-                self.draft, self.model, self.verifier
-            ).generate(input_ids)
+    def __init__(self, model, tokenizer, cfg, draft_models=None, prm=None):
+        self.engine = Engine(model, tokenizer, cfg, draft_models=draft_models, prm=prm)
 
-        if mode == "reason":
-            return reasoning_chain(self.model, input_ids)
-
-        if mode == "mcts":
-            return MCTS(
-                self.model, self.verifier, self.tokenizer
-            ).search(input_ids)
+    def generate(self, prompts, max_new=128, mode="default"):
+        reasoning_mode = None
+        if mode in {"mcts", "beam", "refine"}:
+            reasoning_mode = mode
+        return self.engine.generate(prompts, max_new=max_new, reasoning_mode=reasoning_mode)
