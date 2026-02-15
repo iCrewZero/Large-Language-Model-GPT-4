@@ -2,11 +2,11 @@ import torch
 import torch.nn.functional as F
 
 from rl.grpo import grpo_loss
+from training.contracts import TrainBatch, TrainMetrics
 from training.losses import compute_all_losses, dynamic_weighted_loss
 from training.precision import PrecisionManager
 from training.prm import ProcessRewardModel
 from training.scheduler import CurriculumLengthScheduler
-from training.contracts import TrainBatch, TrainMetrics
 from utils.tensor_checks import assert_dtype, assert_rank, assert_same_device
 
 
@@ -75,6 +75,11 @@ def train_step(
     precision: PrecisionManager | None = None,
     grad_noise_std: float = 0.0,
     loss_ema_state: dict[str, float] | None = None,
+    loss_ema_momentum: float = 0.95,
+    grad_clip_norm: float = 1.0,
+    router_reg_weight: float = 0.01,
+    activation_sparsity_weight: float = 0.001,
+    token_entropy_weight: float = 0.001,
 ) -> TrainMetrics:
     model.train()
     device = next(model.parameters()).device
@@ -106,13 +111,18 @@ def train_step(
             rewards = prm.sequence_reward(out["hidden"].detach())
             losses["grpo"] = grpo_loss(chosen_logp, rewards, group_size=group_size)
 
-        loss, dynamic_weights = dynamic_weighted_loss(losses, loss_ema_state)
+        if "router_reg" in losses:
+            losses["router_reg"] = losses["router_reg"] * router_reg_weight
+        if "activation_sparsity" in losses:
+            losses["activation_sparsity"] = losses["activation_sparsity"] * activation_sparsity_weight
+        if "token_entropy" in losses:
+            losses["token_entropy"] = losses["token_entropy"] * token_entropy_weight
+
+        loss, dynamic_weights = dynamic_weighted_loss(losses, loss_ema_state, momentum=loss_ema_momentum)
 
     optimizer.zero_grad(set_to_none=True)
-    loss.backward()
+    precision.backward_step(loss, optimizer, grad_clip=grad_clip_norm, params=model.parameters())
     _inject_grad_noise(model, grad_noise_std)
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    optimizer.step()
     if scheduler:
         scheduler.step()
 

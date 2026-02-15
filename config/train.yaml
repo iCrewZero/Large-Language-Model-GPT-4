@@ -20,6 +20,16 @@ loss_ce_weight: 1.0
 loss_mtp_weight: 0.1
 loss_contrastive_weight: 0.05
 loss_distill_weight: 0.1
+router_reg_weight: 0.01
+activation_sparsity_weight: 0.001
+token_entropy_weight: 0.001
+logit_clip: 30.0
+grad_clip_norm: 1.0
+loss_ema_momentum: 0.95
+fp8_grad_scale_init: 4096.0
+lr_embed_mult: 0.5
+lr_head_mult: 1.0
+lr_moe_mult: 1.2
 enable_speculative: true
 enable_multi_draft: true
 enable_mcts: true

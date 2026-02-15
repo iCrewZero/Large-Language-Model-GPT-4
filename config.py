@@ -35,6 +35,19 @@ class TrainingConfig:
     loss_contrastive_weight: float = 0.05
     loss_distill_weight: float = 0.1
 
+    # Phase-3 optimization/stability controls
+    router_reg_weight: float = 0.01
+    activation_sparsity_weight: float = 0.001
+    token_entropy_weight: float = 0.001
+    logit_clip: float = 30.0
+    grad_clip_norm: float = 1.0
+    loss_ema_momentum: float = 0.95
+    fp8_grad_scale_init: float = 4096.0
+
+    lr_embed_mult: float = 0.5
+    lr_head_mult: float = 1.0
+    lr_moe_mult: float = 1.2
+
     def validate(self) -> None:
         if self.batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -44,6 +57,10 @@ class TrainingConfig:
             raise ValueError("group_size must be >= 1")
         if self.max_tokens_per_step < 1:
             raise ValueError("max_tokens_per_step must be >= 1")
+        if self.grad_clip_norm <= 0:
+            raise ValueError("grad_clip_norm must be > 0")
+        if self.loss_ema_momentum < 0 or self.loss_ema_momentum >= 1:
+            raise ValueError("loss_ema_momentum must be in [0,1)")
 
 
 @dataclass
